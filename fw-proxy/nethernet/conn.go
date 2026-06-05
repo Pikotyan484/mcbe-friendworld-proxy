@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v3"
 )
 
 // Version は Minecraft のバージョン情報です

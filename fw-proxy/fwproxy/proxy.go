@@ -18,7 +18,7 @@ import (
 type Proxy struct {
 	account      *auth.Account
 	session      *rta.Session
-	listener     net.Listener
+	listener     *net.UDPConn
 	clients      map[net.Addr]*nethernet.Conn
 	mu           sync.Mutex
 	logger       *log.Logger
@@ -36,7 +36,11 @@ type ProxyConfig struct {
 
 // NewProxy は新しいプロキシを作成します
 func NewProxy(cfg ProxyConfig) (*Proxy, error) {
-	listener, err := net.Listen("udp", cfg.ListenAddr)
+	addr, err := net.ResolveUDPAddr("udp4", cfg.ListenAddr)
+	if err != nil {
+		return nil, fmt.Errorf("UDP アドレス解決エラー：%w", err)
+	}
+	listener, err := net.ListenUDP("udp4", addr)
 	if err != nil {
 		return nil, fmt.Errorf("リスナー作成エラー: %w", err)
 	}
