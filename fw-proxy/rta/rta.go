@@ -83,9 +83,7 @@ func (r *RTAClient) GetFriendSessions(ctx context.Context) ([]*Session, error) {
 		} `json:"sessions"`
 	}
 
-	body := make([]byte, resp.ContentLength)
 	// 簡易実装：実際のレスポンスパースは gophertunnel を参照
-
 	// ダミーデータを返す（実際には API レスポンスをパース）
 	_ = result
 	return []*Session{}, nil
