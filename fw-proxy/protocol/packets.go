@@ -139,7 +139,7 @@ func (p *StartGamePacket) Marshal() ([]byte, error) {
 	writeVarInt(buf, int64(len(p.GameRules)))
 	for _, rule := range p.GameRules {
 		writeString(buf, rule.Name)
-		writeVarInt(buf, rule.Type)
+		writeVarInt(buf, int64(rule.Type))
 		switch rule.Type {
 		case 1: // Bool
 			if v, ok := rule.Value.(bool); ok {
@@ -180,10 +180,14 @@ func (p *StartGamePacket) Marshal() ([]byte, error) {
 	writeBool(buf, p.Multiplayer)
 	// Bool: LANBroadcast
 	writeBool(buf, p.LANBroadcast)
-	// VarInt: XBLBroadcast
-	writeVarInt(buf, int64(p.XBLBroadcast))
+	// VarInt: XBLBroadcast (bool -> 0/1)
+	if p.XBLBroadcast {
+		writeVarInt(buf, 1)
+	} else {
+		writeVarInt(buf, 0)
+	}
 	// VarInt: PlatformBroadcast
-	writeVarInt(buf, p.PlatformBroadcast)
+	writeVarInt(buf, int64(p.PlatformBroadcast))
 	// Bool: InboxNotificationsEnabled
 	writeBool(buf, p.InboxNotificationsEnabled)
 	// Bool: CommandBlockEnabled
@@ -222,8 +226,12 @@ func (p *StartGamePacket) Marshal() ([]byte, error) {
 	writeBool(buf, p.EmoteChatMuted)
 	// VarInt: DefaultPlayerPermission
 	writeVarInt(buf, int64(p.DefaultPlayerPermission))
-	// VarInt: ServerAuthoritativeInventory
-	writeVarInt(buf, int64(p.ServerAuthoritativeInventory))
+	// VarInt: ServerAuthoritativeInventory (bool -> 0/1)
+	if p.ServerAuthoritativeInventory {
+		writeVarInt(buf, 1)
+	} else {
+		writeVarInt(buf, 0)
+	}
 	// Bool: ExperimentalGameplayOverride
 	writeBool(buf, p.ExperimentalGameplayOverride)
 	// Bool: ClientSideGeneration
@@ -341,10 +349,11 @@ func (p *StartGamePacket) Unmarshal(data []byte) error {
 		if err != nil {
 			return err
 		}
-		p.GameRules[i].Type, err = readVarInt(buf)
+		ruleType, err := readVarInt(buf)
 		if err != nil {
 			return err
 		}
+		p.GameRules[i].Type = int32(ruleType)
 		switch p.GameRules[i].Type {
 		case 1:
 			p.GameRules[i].Value, err = readBool(buf)
@@ -422,7 +431,7 @@ func (p *StartGamePacket) Unmarshal(data []byte) error {
 	if err != nil {
 		return err
 	}
-	p.XBLBroadcast = int32(xblBroadcast)
+	p.XBLBroadcast = xblBroadcast != 0
 	
 	platformBroadcast, err := readVarInt(buf)
 	if err != nil {
@@ -518,7 +527,7 @@ func (p *StartGamePacket) Unmarshal(data []byte) error {
 	if err != nil {
 		return err
 	}
-	p.ServerAuthoritativeInventory = int32(serverAuthInv)
+	p.ServerAuthoritativeInventory = serverAuthInv != 0
 	
 	p.ExperimentalGameplayOverride, err = readBool(buf)
 	if err != nil {

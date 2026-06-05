@@ -1,37 +1,25 @@
 ```
-# Go build artifacts
-*.o
-*.a
-*.obj
-*.out
-*.test
-*.prof
-*.syso
-
-# Go cache and modules
-go.mod.bak
-go.sum.bak
-*.mod
-*.sum
+# Dependencies
 vendor/
 
-# Build directories
-build/
-dist/
-target/
+# Compiled/Generated files
+*.mod
+*.sum
+*.exe
+*.dll
+*.so
+*.dylib
 
-# Dependencies
-node_modules/
-venv/
-.venv/
-__pycache__/
-*.egg-info/
-.Python-environment
+# Build artifacts
+bin/
+dist/
+build/
+target/
 
 # Logs
 *.log
 
-# Environment variables
+# Environment
 .env
 .env.local
 *.env.*
@@ -41,28 +29,25 @@ __pycache__/
 .idea/
 *.swp
 *.swo
-*~
 
-# OS generated files
+# OS
 .DS_Store
 Thumbs.db
-ehthumbs.db
-Icon?
-.directory
-*.nib
 
 # Coverage
 coverage/
 htmlcov/
 .coverage
-*.coverprofile
 
-# Archives
-*.zip
-*.tar.gz
-*.tar.xz
-*.tar.bz2
-*.gz
-*.rar
-*.7z
+# Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Testing
+*.tmp
+*.temp
 ```
