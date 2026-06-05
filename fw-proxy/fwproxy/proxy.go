@@ -1,370 +1,279 @@
-// Package fwproxy は Minecraft Bedrock Edition フレンドワールドプロキシを提供します
 package fwproxy
 
 import (
-"context"
-"encoding/binary"
-"fmt"
-"io"
-"log"
-"net"
-"sync"
-"time"
+	"context"
+	"fmt"
+	"log"
+	"net"
+	"sync"
+	"time"
 
-"github.com/df-mc/go-nethernet-fw/nethernet"
-"github.com/df-mc/go-nethernet-fw/protocol"
+	"github.com/df-mc/go-nethernet-fw/auth"
+	"github.com/df-mc/go-nethernet-fw/nethernet"
+	"github.com/df-mc/go-nethernet-fw/protocol"
+	"github.com/df-mc/go-nethernet-fw/rta"
 )
 
-// Proxy はフレンドワールドプロキシを表します
+// Proxy はフレンドワールドプロキシです
 type Proxy struct {
-listenAddr     string
-sessionInfo    *nethernet.SessionInfo
-logger         *log.Logger
-mu             sync.Mutex
-clientConn     net.Conn
-serverConn     *nethernet.Conn
-packetHandlers map[uint8]func([]byte) ([]byte, error)
-codingHook     *CodingHook
+	account      *auth.Account
+	session      *rta.Session
+	listener     net.Listener
+	clients      map[net.Addr]*nethernet.Conn
+	mu           sync.Mutex
+	logger       *log.Logger
+	codeHook     func(*protocol.CodeBuilderPacket) *protocol.CodeBuilderPacket
 }
 
-// CodingHook は Code Builder パケットのフックを管理します
-type CodingHook struct {
-mu           sync.Mutex
-onCodeRequest func(url string) string
-onCodeResponse func(code string)
-enabled      bool
-}
-
-// ProxyConfig はプロキシの設定を表します
+// ProxyConfig はプロキシ設定です
 type ProxyConfig struct {
-ListenAddr  string
-SessionInfo *nethernet.SessionInfo
-Logger      *log.Logger
+	Account  *auth.Account
+	Session  *rta.Session
+	ListenAddr string
+	Logger   *log.Logger
+	CodeHook func(*protocol.CodeBuilderPacket) *protocol.CodeBuilderPacket
 }
 
-// NewProxy は新しいプロキシインスタンスを作成します
-func NewProxy(config ProxyConfig) *Proxy {
-p := &Proxy{
-listenAddr:     config.ListenAddr,
-sessionInfo:    config.SessionInfo,
-logger:         config.Logger,
-packetHandlers: make(map[uint8]func([]byte) ([]byte, error)),
-codingHook: &CodingHook{
-enabled: true,
-},
+// NewProxy は新しいプロキシを作成します
+func NewProxy(cfg ProxyConfig) (*Proxy, error) {
+	listener, err := net.Listen("udp", cfg.ListenAddr)
+	if err != nil {
+		return nil, fmt.Errorf("リスナー作成エラー: %w", err)
+	}
+
+	return &Proxy{
+		account:   cfg.Account,
+		session:   cfg.Session,
+		listener:  listener,
+		clients:   make(map[net.Addr]*nethernet.Conn),
+		logger:    cfg.Logger,
+		codeHook:  cfg.CodeHook,
+	}, nil
 }
 
-// デフォルトのパケットハンドラを登録
-p.registerDefaultHandlers()
-
-return p
-}
-
-// registerDefaultHandlers はデフォルトのパケットハンドラを登録します
-func (p *Proxy) registerDefaultHandlers() {
-// Code Builder パケットのフック
-p.packetHandlers[protocol.PacketIDCodeBuilder] = p.handleCodeBuilderPacket
-p.packetHandlers[protocol.PacketIDCodeBuilderResponse] = p.handleCodeBuilderResponse
-}
-
-// handleCodeBuilderPacket は Code Builder リクエストパケットを処理します
-func (p *Proxy) handleCodeBuilderPacket(data []byte) ([]byte, error) {
-if !p.codingHook.enabled {
-return data, nil
-}
-
-pkt, err := protocol.ParseCodeBuilderPacket(data)
-if err != nil {
-p.logger.Printf("CodeBuilder パケット解析エラー：%v", err)
-return data, nil
-}
-
-p.logger.Printf("CodeBuilder リクエスト受信：URL=%s, Status=%d, ShouldOpen=%v", 
-pkt.URL, pkt.CodeStatus, pkt.ShouldOpen)
-
-// フックが設定されていれば呼び出す
-if p.codingHook.onCodeRequest != nil && pkt.CodeStatus == 1 {
-code := p.codingHook.onCodeRequest(pkt.URL)
-if code != "" {
-// レスポンスを生成して返す
-resp := &protocol.CodeBuilderPacket{
-URL:        pkt.URL,
-CodeStatus: 2, // response
-ShouldOpen: false,
-Code:       code,
-}
-return protocol.EncodeCodeBuilderPacket(resp)
-}
-}
-
-return data, nil
-}
-
-// handleCodeBuilderResponse は Code Builder レスポンスパケットを処理します
-func (p *Proxy) handleCodeBuilderResponse(data []byte) ([]byte, error) {
-if !p.codingHook.enabled {
-return data, nil
-}
-
-pkt, err := protocol.ParseCodeBuilderPacket(data)
-if err != nil {
-p.logger.Printf("CodeBuilder レスポンス解析エラー：%v", err)
-return data, nil
-}
-
-p.logger.Printf("CodeBuilder レスポンス受信：URL=%s, Code=%s", pkt.URL, pkt.Code)
-
-// フックが設定されていれば呼び出す
-if p.codingHook.onCodeResponse != nil && pkt.CodeStatus == 2 {
-p.codingHook.onCodeResponse(pkt.Code)
-}
-
-return data, nil
-}
-
-// SetCodingRequestHandler は Code リクエスト時のハンドラを設定します
-func (p *Proxy) SetCodingRequestHandler(handler func(url string) string) {
-p.codingHook.mu.Lock()
-defer p.codingHook.mu.Unlock()
-p.codingHook.onCodeRequest = handler
-}
-
-// SetCodingResponseHandler は Code レスポンス時のハンドラを設定します
-func (p *Proxy) SetCodingResponseHandler(handler func(code string)) {
-p.codingHook.mu.Lock()
-defer p.codingHook.mu.Unlock()
-p.codingHook.onCodeResponse = handler
-}
-
-// EnableCodingHook は Coding フックの有効/無効を設定します
-func (p *Proxy) EnableCodingHook(enabled bool) {
-p.codingHook.mu.Lock()
-defer p.codingHook.mu.Unlock()
-p.codingHook.enabled = enabled
-}
-
-// Start はプロキシサーバーを開始します
+// Start はプロキシを開始します
 func (p *Proxy) Start(ctx context.Context) error {
-addr, err := net.ResolveUDPAddr("udp", p.listenAddr)
-if err != nil {
-return fmt.Errorf("アドレス解決エラー：%w", err)
+	p.logger.Printf("🚀 プロキシ開始: %s", p.listener.Addr())
+	p.logger.Printf("   Gamertag: %s (XUID: %s)", p.account.Gamertag, p.account.XUID)
+	if p.session != nil {
+		p.logger.Printf("   Session: %s", p.session.SessionID)
+		p.logger.Printf("   World: %s", p.session.WorldName)
+	}
+
+	go p.acceptLoop(ctx)
+
+	return nil
 }
 
-conn, err := net.ListenUDP("udp", addr)
-if err != nil {
-return fmt.Errorf("リスニングエラー：%w", err)
-}
-defer conn.Close()
+func (p *Proxy) acceptLoop(ctx context.Context) {
+	buf := make([]byte, 65536)
 
-p.logger.Printf("プロキシ開始：%s", p.listenAddr)
+	for {
+		select {
+		case <-ctx.Done():
+			p.logger.Println("プロキシ終了")
+			return
+		default:
+		}
 
-buf := make([]byte, 65535)
-for {
-select {
-case <-ctx.Done():
-return ctx.Err()
-default:
-conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-n, clientAddr, err := conn.ReadFromUDP(buf)
-if err != nil {
-if ne, ok := err.(net.Error); ok && ne.Timeout() {
-continue
-}
-return fmt.Errorf("読み込みエラー：%w", err)
-}
+		p.listener.SetReadDeadline(time.Now().Add(2 * time.Second))
+		n, addr, err := p.listener.ReadFromUDP(buf)
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				continue
+			}
+			p.logger.Printf("読み込みエラー: %v", err)
+			continue
+		}
 
-// クライアントからのパケットを処理
-go p.handleClientPacket(conn, clientAddr, buf[:n])
-}
-}
-}
+		// クライアント接続を管理
+		conn := p.getOrCreateClient(addr)
+		if conn == nil {
+			continue
+		}
 
-// handleClientPacket はクライアントからのパケットを処理します
-func (p *Proxy) handleClientPacket(conn *net.UDPConn, clientAddr *net.UDPAddr, data []byte) {
-// パケット ID を取得
-if len(data) < 1 {
-return
-}
-packetID := data[0]
-
-// ハンドラがあれば適用
-if handler, ok := p.packetHandlers[packetID]; ok {
-modifiedData, err := handler(data)
-if err != nil {
-p.logger.Printf("パケット処理エラー：%v", err)
-return
-}
-data = modifiedData
+		// パケット処理
+		p.handlePacket(conn, addr, buf[:n])
+	}
 }
 
-// サーバーに転送（未実装：現在はログのみ）
-p.logger.Printf("クライアント→サーバー：PacketID=0x%02X, Size=%d", packetID, len(data))
+func (p *Proxy) getOrCreateClient(addr net.Addr) *nethernet.Conn {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if conn, ok := p.clients[addr]; ok {
+		return conn
+	}
+
+	// 新しいクライアント接続を作成
+	sessionInfo := &nethernet.SessionInfo{
+		SessionID:   p.session.SessionID,
+		SCID:        p.session.SCID,
+		Template:    p.session.Template,
+		NetherNetID: p.session.NetherNetID,
+		XUID:        p.account.XUID,
+	}
+
+	signaling := &WebSocketSignalingAdapter{
+		sessionID: p.session.SessionID,
+		xuid:      p.account.XUID,
+		token:     p.account.Token,
+	}
+
+	cfg := nethernet.ConnConfig{
+		Signaling:   signaling,
+		SessionInfo: sessionInfo,
+		Logger:      p.logger,
+	}
+
+	conn, err := nethernet.NewConn(cfg)
+	if err != nil {
+		p.logger.Printf("接続作成エラー: %v", err)
+		return nil
+	}
+
+	// 接続開始
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := conn.Dial(ctx); err != nil {
+			p.logger.Printf("接続エラー: %v", err)
+			return
+		}
+		p.logger.Printf("✅ クライアント接続完了: %s", addr)
+	}()
+
+	p.clients[addr] = conn
+	return conn
 }
 
-// ConnectToFriendWorld はフレンドワールドに接続します
-func (p *Proxy) ConnectToFriendWorld(ctx context.Context, signaling nethernet.Signaling) error {
-p.mu.Lock()
-defer p.mu.Unlock()
+func (p *Proxy) handlePacket(conn *nethernet.Conn, addr net.Addr, data []byte) {
+	if len(data) < 2 {
+		return
+	}
 
-p.logger.Println("フレンドワールドに接続中...")
+	// Minecraft パケットヘッダー解析
+	packetID := protocol.PacketID(data[0])
+	
+	// Code Builder パケットのフック
+	if packetID == protocol.PacketIDCodeBuilderRequestPacket || 
+	   packetID == protocol.PacketIDCodeBuilderResponsePacket ||
+	   packetID == protocol.PacketIDCodeBuilderPacket {
+		
+		var cbPacket protocol.CodeBuilderPacket
+		if err := cbPacket.Unmarshal(data[1:]); err == nil {
+			if p.codeHook != nil {
+				modified := p.codeHook(&cbPacket)
+				if modified != nil {
+					modifiedData, _ := modified.Marshal()
+					data = append([]byte{byte(packetID)}, modifiedData...)
+					p.logger.Printf("📝 Code Builder パケット改変: URL=%s", modified.URL)
+				}
+			}
+		}
+	}
 
-// NetherNet 接続を確立
-conn, err := nethernet.DialContext(ctx, signaling)
-if err != nil {
-return fmt.Errorf("NetherNet 接続エラー：%w", err)
+	// WebRTC 経由で送信
+	if _, err := conn.Write(data); err != nil {
+		p.logger.Printf("送信エラー: %v", err)
+	}
 }
 
-p.serverConn = conn
-p.logger.Println("フレンドワールドに接続完了")
+// Stop はプロキシを停止します
+func (p *Proxy) Stop() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-// パケット転送スレッドを開始
-go p.forwardPackets()
+	for _, conn := range p.clients {
+		conn.Close()
+	}
+	p.clients = make(map[net.Addr]*nethernet.Conn)
 
-return nil
-}
-
-// forwardPackets はパケットを双方向に転送します
-func (p *Proxy) forwardPackets() {
-if p.serverConn == nil {
-return
+	return p.listener.Close()
 }
 
-// サーバー→クライアント
-go func() {
-buf := make([]byte, 65535)
-for {
-n, err := p.serverConn.Read(buf)
-if err != nil {
-p.logger.Printf("サーバー読み込みエラー：%v", err)
-return
+// SetCodeHook は Code Builder フックを設定します
+func (p *Proxy) SetCodeHook(hook func(*protocol.CodeBuilderPacket) *protocol.CodeBuilderPacket) {
+	p.codeHook = hook
 }
 
-data := buf[:n]
-if len(data) < 1 {
-continue
+// WebSocketSignalingAdapter は WebSocket シグナリングをアダプトします
+type WebSocketSignalingAdapter struct {
+	sessionID string
+	xuid      string
+	token     string
+	ws        *rta.WebSocketSignaling
+	mu        sync.Mutex
 }
 
-packetID := data[0]
+func (w *WebSocketSignalingAdapter) SendOffer(ctx context.Context, info *nethernet.SessionInfo, offer []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-// ハンドラがあれば適用
-if handler, ok := p.packetHandlers[packetID]; ok {
-modifiedData, err := handler(data)
-if err != nil {
-p.logger.Printf("パケット処理エラー：%v", err)
-continue
-}
-data = modifiedData
-}
+	if w.ws == nil {
+		var err error
+		w.ws, err = rta.ConnectWebSocket(ctx, w.sessionID, w.xuid, w.token)
+		if err != nil {
+			return err
+		}
+	}
 
-// クライアントに転送（未実装：現在はログのみ）
-p.logger.Printf("サーバー→クライアント：PacketID=0x%02X, Size=%d", packetID, len(data))
-}
-}()
+	return w.ws.SendOffer(offer)
 }
 
-// Close はプロキシを閉じます
-func (p *Proxy) Close() error {
-p.mu.Lock()
-defer p.mu.Unlock()
+func (w *WebSocketSignalingAdapter) SendAnswer(ctx context.Context, info *nethernet.SessionInfo, answer []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-if p.serverConn != nil {
-if err := p.serverConn.Close(); err != nil {
-return err
-}
-}
+	if w.ws == nil {
+		var err error
+		w.ws, err = rta.ConnectWebSocket(ctx, w.sessionID, w.xuid, w.token)
+		if err != nil {
+			return err
+		}
+	}
 
-return nil
-}
-
-// InjectCodeBuilderPacket は Code Builder パケットを注入します
-func (p *Proxy) InjectCodeBuilderPacket(url string, shouldOpen bool) error {
-if p.serverConn == nil {
-return fmt.Errorf("接続されていません")
+	return w.ws.SendAnswer(answer)
 }
 
-pkt := &protocol.CodeBuilderPacket{
-URL:        url,
-CodeStatus: 1, // request
-ShouldOpen: shouldOpen,
+func (w *WebSocketSignalingAdapter) SendCandidate(ctx context.Context, info *nethernet.SessionInfo, candidate []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.ws == nil {
+		return nil // まだ接続されていない
+	}
+
+	return w.ws.SendCandidate(candidate)
 }
 
-data, err := protocol.EncodeCodeBuilderPacket(pkt)
-if err != nil {
-return fmt.Errorf("エンコードエラー：%w", err)
+func (w *WebSocketSignalingAdapter) Receive(ctx context.Context) (nethernet.Signal, error) {
+	if w.ws == nil {
+		return nethernet.Signal{}, fmt.Errorf("WebSocket 未接続")
+	}
+
+	msg, err := w.ws.Receive(ctx)
+	if err != nil {
+		return nethernet.Signal{}, err
+	}
+
+	signal := nethernet.Signal{}
+	if t, ok := msg["type"].(string); ok {
+		signal.Type = nethernet.SignalType(t)
+	}
+	if payload, ok := msg["payload"].(string); ok {
+		signal.Data = []byte(payload)
+	}
+	if connID, ok := msg["connectionId"].(string); ok {
+		signal.ConnectionID = connID
+	}
+
+	return signal, nil
 }
 
-_, err = p.serverConn.Write(data)
-return err
-}
-
-// GetSessionInfo はセッション情報を取得します
-func (p *Proxy) GetSessionInfo() *nethernet.SessionInfo {
-return p.sessionInfo
-}
-
-// LogPacket はパケットをログ出力します（デバッグ用）
-func LogPacket(direction string, data []byte, logger *log.Logger) {
-if len(data) < 1 {
-return
-}
-packetID := data[0]
-logger.Printf("%s: PacketID=0x%02X (%d), Size=%d", direction, packetID, packetID, len(data))
-
-// StartGame パケットの場合は詳細を表示
-if packetID == protocol.PacketIDStartGame && len(data) > 1 {
-pkt, err := protocol.ParseStartGamePacket(data)
-if err == nil {
-logger.Printf("  StartGame: WorldName=%s, ServerVersion=%s, Dimension=%d",
-pkt.WorldName, pkt.ServerVersion, pkt.Dimension)
-}
-}
-}
-
-// ReadVarInt は可変長整数を読み取ります
-func ReadVarInt(r io.Reader) (int64, error) {
-return protocol.DecodeVarInt(r)
-}
-
-// WriteVarInt は可変長整数を書き込みます
-func WriteVarInt(w io.Writer, value int64) error {
-return protocol.EncodeVarInt(w, value)
-}
-
-// ReadString は文字列を読み取ります
-func ReadString(r io.Reader) (string, error) {
-return protocol.DecodeString(r)
-}
-
-// WriteString は文字列を書き込みます
-func WriteString(w io.Writer, s string) error {
-return protocol.EncodeString(w, s)
-}
-
-// WriteUint16LE は 16 ビット整数をリトルエンディアンで書き込みます
-func WriteUint16LE(w io.Writer, v uint16) error {
-return binary.Write(w, binary.LittleEndian, v)
-}
-
-// WriteUint32LE は 32 ビット整数をリトルエンディアンで書き込みます
-func WriteUint32LE(w io.Writer, v uint32) error {
-return binary.Write(w, binary.LittleEndian, v)
-}
-
-// WriteUint64LE は 64 ビット整数をリトルエンディアンで書き込みます
-func WriteUint64LE(w io.Writer, v uint64) error {
-return binary.Write(w, binary.LittleEndian, v)
-}
-
-// WriteFloat32LE は 32 ビット浮動小数点をリトルエンディアンで書き込みます
-func WriteFloat32LE(w io.Writer, v float32) error {
-return binary.Write(w, binary.LittleEndian, v)
-}
-
-// WriteBool はブール値を書き込みます
-func WriteBool(w io.Writer, v bool) error {
-var b byte
-if v {
-b = 1
-}
-return w.WriteByte(b)
+func (w *WebSocketSignalingAdapter) Close() error {
+	if w.ws != nil {
+		return w.ws.Close()
+	}
+	return nil
 }
