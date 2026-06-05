@@ -1,79 +1,159 @@
 package main
 
 import (
-"context"
-"flag"
-"log"
-"os"
-"os/signal"
-"syscall"
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-"github.com/df-mc/go-nethernet-fw/fwproxy"
-"github.com/df-mc/go-nethernet-fw/nethernet"
+	"github.com/df-mc/go-nethernet-fw/auth"
+	"github.com/df-mc/go-nethernet-fw/fwproxy"
+	"github.com/df-mc/go-nethernet-fw/protocol"
+	"github.com/df-mc/go-nethernet-fw/rta"
 )
 
 func main() {
-// コマンドライン引数の解析
-token := flag.String("token", "", "Xbox Live トークン")
-xuid := flag.String("xuid", "", "Xbox User ID")
-sessionID := flag.String("session", "", "Session ID")
-scid := flag.String("scid", "", "SCID (Service Configuration ID)")
-template := flag.String("template", "", "Template ID")
-netherNetID := flag.Int64("nethernet-id", 0, "NetherNet ID")
-listenAddr := flag.String("listen", "127.0.0.1:19132", "リッスンアドレス")
-flag.Parse()
+	// コマンドライン引数
+	listenAddr := flag.String("listen", "127.0.0.1:19132", "リッスンアドレス")
+	sessionID := flag.String("session", "", "セッション ID（省略可能：自動選択）")
+	autoSelect := flag.Bool("auto", false, "フレンドのワールドを自動選択")
+	customCode := flag.String("code", "", "カスタム Code Builder コード")
+	flag.Parse()
 
-// 必須パラメータのチェック
-if *token == "" || *xuid == "" || *sessionID == "" || *scid == "" {
-log.Fatal("エラー：-token, -xuid, -session, -scid は必須です")
-}
+	fmt.Println("╔═══════════════════════════════════════════════════╗")
+	fmt.Println("║     Minecraft Bedrock 26.20 フレンドワールドプロキシ    ║")
+	fmt.Println("║           Protocol Version: 975                   ║")
+	fmt.Println("╚═══════════════════════════════════════════════════╝")
+	fmt.Println()
 
-logger := log.New(os.Stdout, "[FW-Proxy] ", log.LstdFlags)
-logger.Println("Minecraft Bedrock Edition フレンドワールドプロキシ")
-logger.Printf("バージョン：1.21.90 (26.20), プロトコル：975")
+	// シグナルハンドリング
+	ctx, cancel := context.WithCancel(context.Background())
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		fmt.Println("\n🛑 シャットダウン中...")
+		cancel()
+	}()
 
-// セッション情報の作成
-sessionInfo := &nethernet.SessionInfo{
-SessionID:   *sessionID,
-SCID:        *scid,
-Template:    *template,
-NetherNetID: *netherNetID,
-}
+	// 1. 認証（microsoft.com/link フロー）
+	fmt.Println("📡 認証中...")
+	authenticator := auth.NewAuthenticator()
+	account, err := authenticator.DeviceCodeAuthFlow(ctx)
+	if err != nil {
+		log.Fatalf("認証エラー: %v", err)
+	}
 
-// プロキシの作成
-proxy := fwproxy.NewProxy(fwproxy.ProxyConfig{
-ListenAddr:  *listenAddr,
-SessionInfo: sessionInfo,
-Logger:      logger,
-})
+	// 2. セッション取得
+	var session *rta.Session
+	rtaClient := rta.NewRTAClient(account.Token, account.XUID)
 
-// Coding フックのハンドラを設定
-proxy.SetCodingRequestHandler(func(url string) string {
-logger.Printf("Code リクエスト：%s", url)
-// ここで独自のコードを返すことができます
-return "console.log('Hello from FW-Proxy!');"
-})
+	if *autoSelect || *sessionID == "" {
+		// フレンドのセッション一覧を取得
+		fmt.Println("🔍 フレンドのセッションを検索中...")
+		sessions, err := rtaClient.GetFriendSessions(ctx)
+		if err != nil {
+			log.Fatalf("セッション取得エラー: %v", err)
+		}
 
-proxy.SetCodingResponseHandler(func(code string) {
-logger.Printf("Code レスポンス：%s", code)
-})
+		if len(sessions) == 0 {
+			fmt.Println("⚠️ 開いているフレンドのワールドが見つかりません")
+			fmt.Println("   手動でセッション ID を指定してください: -session <ID>")
+			return
+		}
 
-// シグナル処理
-ctx, cancel := context.WithCancel(context.Background())
-sigChan := make(chan os.Signal, 1)
-signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		// 最初のセッションを選択（またはユーザーに選択させる）
+		fmt.Printf("✅ %d 個のセッションを発見:\n", len(sessions))
+		for i, s := range sessions {
+			fmt.Printf("   [%d] %s (オーナー：%s)\n", i+1, s.WorldName, s.OwnerGamertag)
+		}
 
-go func() {
-<-sigChan
-logger.Println("シャットダウン中...")
-cancel()
-}()
+		if *sessionID == "" {
+			session = sessions[0] // 最初のを自動選択
+			fmt.Printf("🎮 '%s' に接続します...\n", session.WorldName)
+		} else {
+			// 指定された ID を探す
+			found := false
+			for _, s := range sessions {
+				if s.SessionID == *sessionID {
+					session = s
+					found = true
+					break
+				}
+			}
+			if !found {
+				log.Fatalf("セッション ID '%s' が見つかりません", *sessionID)
+			}
+		}
+	} else {
+		// 指定されたセッション ID を使用
+		fmt.Printf("🔍 セッション '%s' を取得中...\n", *sessionID)
+		session, err = rtaClient.SelectSession(ctx, *sessionID)
+		if err != nil {
+			log.Fatalf("セッション選択エラー: %v", err)
+		}
+	}
 
-// プロキシ開始
-logger.Printf("リスニング開始：%s", *listenAddr)
-if err := proxy.Start(ctx); err != nil && err != context.Canceled {
-logger.Fatalf("プロキシエラー：%v", err)
-}
+	// 3. プロキシ設定
+	logger := log.New(os.Stdout, "[Proxy] ", log.LstdFlags)
 
-logger.Println("プロキシ終了")
+	codeHook := func(pkt *protocol.CodeBuilderPacket) *protocol.CodeBuilderPacket {
+		if *customCode != "" {
+			fmt.Printf("📝 Code Builder カスタムコード注入: %s\n", *customCode)
+			return &protocol.CodeBuilderPacket{
+				URL:  pkt.URL,
+				Code: *customCode,
+			}
+		}
+		return pkt
+	}
+
+	cfg := fwproxy.ProxyConfig{
+		Account:    account,
+		Session:    session,
+		ListenAddr: *listenAddr,
+		Logger:     logger,
+		CodeHook:   codeHook,
+	}
+
+	proxy, err := fwproxy.NewProxy(cfg)
+	if err != nil {
+		log.Fatalf("プロキシ作成エラー: %v", err)
+	}
+
+	// 4. プロキシ開始
+	fmt.Println()
+	if err := proxy.Start(ctx); err != nil {
+		log.Fatalf("プロキシ開始エラー: %v", err)
+	}
+
+	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Printf("✅ プロキシが稼働中: %s\n", *listenAddr)
+	fmt.Printf("   アカウント：%s (%s)\n", account.Gamertag, account.XUID)
+	fmt.Printf("   ワールド：%s\n", session.WorldName)
+	fmt.Printf("   セッション：%s\n", session.SessionID)
+	fmt.Println()
+	fmt.Println("🎮 Minecraft から以下に接続:")
+	fmt.Printf("   サーバーアドレス：%s\n", *listenAddr)
+	fmt.Println()
+	fmt.Println("💡 Coding 機能を使用すると、カスタムコードが注入されます")
+	fmt.Println("   Ctrl+C で終了")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println()
+
+	// 待機
+	<-ctx.Done()
+
+	// クリーンアップ
+	fmt.Println("🔄 プロキシを停止中...")
+	if err := proxy.Stop(); err != nil {
+		log.Printf("停止エラー: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	fmt.Println("👋 さようなら！")
 }

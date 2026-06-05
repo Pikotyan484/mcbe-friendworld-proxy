@@ -1,425 +1,726 @@
-// Package protocol は Minecraft Bedrock Edition のパケット処理を提供します
 package protocol
 
 import (
-"bytes"
-"encoding/binary"
-"errors"
-"io"
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
 )
 
-// パケット ID 定数（Bedrock Edition 26.20 / Protocol 975）
+// Minecraft のバージョン情報
 const (
-PacketIDStartGame           = 0x01
-PacketIDCodeBuilder         = 0x6A // Code Builder パケット
-PacketIDCodeBuilderResponse = 0x6B
-PacketIDRequestChunkRadius  = 0x54
-PacketIDChunkRadiusUpdated  = 0x55
-PacketIDPlayerList          = 0xDD
-PacketIDMovePlayer          = 0x13
-PacketIDUpdateAttributes    = 0x75
-PacketIDServerSettingsReq   = 0x68
-PacketIDServerSettingsResp  = 0x69
+	VersionString   = "26.20"
+	ProtocolVersion = 975
 )
 
-// PacketHeader はパケットヘッダーを表します
-type PacketHeader struct {
-PacketID uint8
+// PacketID はパケット ID です
+type PacketID uint32
+
+const (
+	PacketIDStartGame PacketID = 0x0b
+	PacketIDCodeBuilderPacket PacketID = 0x4d
+	PacketIDCodeBuilderRequestPacket PacketID = 0x4e
+	PacketIDCodeBuilderResponsePacket PacketID = 0x4f
+)
+
+// Packet は Minecraft パケットのインターフェースです
+type Packet interface {
+	ID() PacketID
+	Marshal() ([]byte, error)
+	Unmarshal([]byte) error
 }
 
-// StartGamePacket は StartGame パケットを表します
+// StartGamePacket は StartGame パケットです
 type StartGamePacket struct {
-EntityID            int64
-RuntimeEntityID     int64
-PlayerGamemode      int32
-PlayerPosition      [3]float32
-Pitch               float32
-Yaw                 float32
-Seed                int64
-Dimension           int16
-GeneratorType       int32
-GamemodeForAll      int32
-Hardcore            bool
-Cheats              bool
-CommandsEnabled     bool
-NoMobs              bool
-GameRules           []GameRule
-Experiments         []Experiment
-BonusChest          bool
-StartWithMap        bool
-ServerVersion       string
-EduFeatures         bool
-EduProductUUID      string
-RainLevel           float32
-LightningLevel      float32
-ConfirmedPlatform   bool
-PlatformBroadcast   string
-XBLBroadcast        string
-DSLBroadcast        string
-WorldName           string
-TemplateContentKey  string
-IsFromTemplate      bool
-IsTrial             bool
-MovementType        int32
-ServerAuthoritativeInventory bool
-EngineVersion       string
-ServerEngineVersion string
+	EntityID          int64
+	RuntimeEntityID   int64
+	PlayerGamemode    int32
+	PlayerPosition    [3]float32
+	Pitch             float32
+	Yaw               float32
+	Seed              int64
+	Dimension         int16
+	GeneratorType     int32
+	GameMode          int32
+	Hardcore          bool
+	Cheats            bool
+	RequiresPack      bool
+	GameRules         []GameRule
+	LevelName         string
+	TemplateContent   []byte
+	HasAchievements   bool
+	Time              int32
+	EducationEdition  bool
+	EduFeatures       bool
+	RainLevel         float32
+	LightningLevel    float32
+	Platform          string
+	Multiplayer       bool
+	LANBroadcast      bool
+	XBLBroadcast      bool
+	PlatformBroadcast int32
+	InboxNotificationsEnabled bool
+	CommandBlockEnabled bool
+	RequiresResourcePack bool
+	ExperimentalGameplay bool
+	BonusChestEnabled bool
+	StartWithMapEnabled bool
+	Permissions       int32
+	ServerChunkTickRange int32
+	BehaviorPackLocked bool
+	ResourcePackLocked bool
+	FromLockedWorldTemplate bool
+	UseMSAGamerTagsOnly bool
+	FromWorldTemplate bool
+	WorldTemplateOptionLocked bool
+	OnlySpawnV1Villagers bool
+	PersonaDisabled bool
+	CustomSkinsDisabled bool
+	EmoteChatMuted bool
+	DefaultPlayerPermission int32
+	ServerAuthoritativeInventory bool
+	ExperimentalGameplayOverride bool
+	ClientSideGeneration bool
+	WorldVersion        int32
+	LimitedWorldWidth   int32
+	LimitedWorldDepth   int32
+	NewNether           bool
+	EduSharedURI        string
+	EduSharedResourcePatch bool
+	ForceExperimentalGameplay bool
+	ServerID            string
+	WorldID             string
+	ScenarioID          string
+	Tier                int32
 }
 
-// GameRule はゲームルールを表します
 type GameRule struct {
-Name   string
-Value  interface{}
-Type   uint8 // 1=bool, 2=int, 3=float
+	Name     string
+	Type     int32
+	Value    interface{}
 }
 
-// Experiment は実験機能を表します
-type Experiment struct {
-Name    string
-Enabled bool
+func (p *StartGamePacket) ID() PacketID {
+	return PacketIDStartGame
 }
 
-// ReadPacketID はストリームからパケット ID を読み取ります
-func ReadPacketID(r io.Reader) (uint8, error) {
-var id uint8
-err := binary.Read(r, binary.LittleEndian, &id)
-return id, err
+func (p *StartGamePacket) Marshal() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	
+	// VarInt: EntityID
+	writeVarInt(buf, p.EntityID)
+	// VarInt: RuntimeEntityID
+	writeVarInt(buf, p.RuntimeEntityID)
+	// VarInt: PlayerGamemode
+	writeVarInt(buf, int64(p.PlayerGamemode))
+	// Vec3f: Position
+	writeFloat32(buf, p.PlayerPosition[0])
+	writeFloat32(buf, p.PlayerPosition[1])
+	writeFloat32(buf, p.PlayerPosition[2])
+	// Float32: Pitch, Yaw
+	writeFloat32(buf, p.Pitch)
+	writeFloat32(buf, p.Yaw)
+	// VarInt: Seed
+	writeVarInt(buf, p.Seed)
+	// VarInt: Dimension
+	writeVarInt(buf, int64(p.Dimension))
+	// VarInt: GeneratorType
+	writeVarInt(buf, int64(p.GeneratorType))
+	// VarInt: GameMode
+	writeVarInt(buf, int64(p.GameMode))
+	// Bool: Hardcore
+	writeBool(buf, p.Hardcore)
+	// Bool: Cheats
+	writeBool(buf, p.Cheats)
+	// Bool: RequiresPack
+	writeBool(buf, p.RequiresPack)
+	// VarInt: GameRules count
+	writeVarInt(buf, int64(len(p.GameRules)))
+	for _, rule := range p.GameRules {
+		writeString(buf, rule.Name)
+		writeVarInt(buf, rule.Type)
+		switch rule.Type {
+		case 1: // Bool
+			if v, ok := rule.Value.(bool); ok {
+				writeBool(buf, v)
+			}
+		case 2: // Int
+			if v, ok := rule.Value.(int32); ok {
+				writeVarInt(buf, int64(v))
+			}
+		case 3: // Float
+			if v, ok := rule.Value.(float32); ok {
+				writeFloat32(buf, v)
+			}
+		}
+	}
+	// String: LevelName
+	writeString(buf, p.LevelName)
+	// String: TemplateContent (base64)
+	writeString(buf, string(p.TemplateContent))
+	// Bool: HasAchievements
+	writeBool(buf, p.HasAchievements)
+	// VarInt: Time
+	writeVarInt(buf, int64(p.Time))
+	// Bool: EducationEdition
+	writeBool(buf, p.EducationEdition)
+	// Bool: EduFeatures
+	writeBool(buf, p.EduFeatures)
+	// Float32: RainLevel
+	writeFloat32(buf, p.RainLevel)
+	// Float32: LightningLevel
+	writeFloat32(buf, p.LightningLevel)
+	// Bool: Platform
+	writeBool(buf, p.Platform != "")
+	if p.Platform != "" {
+		writeString(buf, p.Platform)
+	}
+	// Bool: Multiplayer
+	writeBool(buf, p.Multiplayer)
+	// Bool: LANBroadcast
+	writeBool(buf, p.LANBroadcast)
+	// VarInt: XBLBroadcast
+	writeVarInt(buf, int64(p.XBLBroadcast))
+	// VarInt: PlatformBroadcast
+	writeVarInt(buf, p.PlatformBroadcast)
+	// Bool: InboxNotificationsEnabled
+	writeBool(buf, p.InboxNotificationsEnabled)
+	// Bool: CommandBlockEnabled
+	writeBool(buf, p.CommandBlockEnabled)
+	// Bool: RequiresResourcePack
+	writeBool(buf, p.RequiresResourcePack)
+	// Bool: ExperimentalGameplay
+	writeBool(buf, p.ExperimentalGameplay)
+	// Bool: BonusChestEnabled
+	writeBool(buf, p.BonusChestEnabled)
+	// Bool: StartWithMapEnabled
+	writeBool(buf, p.StartWithMapEnabled)
+	// VarInt: Permissions
+	writeVarInt(buf, int64(p.Permissions))
+	// VarInt: ServerChunkTickRange
+	writeVarInt(buf, int64(p.ServerChunkTickRange))
+	// Bool: BehaviorPackLocked
+	writeBool(buf, p.BehaviorPackLocked)
+	// Bool: ResourcePackLocked
+	writeBool(buf, p.ResourcePackLocked)
+	// Bool: FromLockedWorldTemplate
+	writeBool(buf, p.FromLockedWorldTemplate)
+	// Bool: UseMSAGamerTagsOnly
+	writeBool(buf, p.UseMSAGamerTagsOnly)
+	// Bool: FromWorldTemplate
+	writeBool(buf, p.FromWorldTemplate)
+	// Bool: WorldTemplateOptionLocked
+	writeBool(buf, p.WorldTemplateOptionLocked)
+	// Bool: OnlySpawnV1Villagers
+	writeBool(buf, p.OnlySpawnV1Villagers)
+	// Bool: PersonaDisabled
+	writeBool(buf, p.PersonaDisabled)
+	// Bool: CustomSkinsDisabled
+	writeBool(buf, p.CustomSkinsDisabled)
+	// Bool: EmoteChatMuted
+	writeBool(buf, p.EmoteChatMuted)
+	// VarInt: DefaultPlayerPermission
+	writeVarInt(buf, int64(p.DefaultPlayerPermission))
+	// VarInt: ServerAuthoritativeInventory
+	writeVarInt(buf, int64(p.ServerAuthoritativeInventory))
+	// Bool: ExperimentalGameplayOverride
+	writeBool(buf, p.ExperimentalGameplayOverride)
+	// Bool: ClientSideGeneration
+	writeBool(buf, p.ClientSideGeneration)
+	// VarInt: WorldVersion
+	writeVarInt(buf, int64(p.WorldVersion))
+	// VarInt: LimitedWorldWidth
+	writeVarInt(buf, int64(p.LimitedWorldWidth))
+	// VarInt: LimitedWorldDepth
+	writeVarInt(buf, int64(p.LimitedWorldDepth))
+	// Bool: NewNether
+	writeBool(buf, p.NewNether)
+	// String: EduSharedURI
+	writeString(buf, p.EduSharedURI)
+	// Bool: EduSharedResourcePatch
+	writeBool(buf, p.EduSharedResourcePatch)
+	// Bool: ForceExperimentalGameplay
+	writeBool(buf, p.ForceExperimentalGameplay)
+	// String: ServerID
+	writeString(buf, p.ServerID)
+	// String: WorldID
+	writeString(buf, p.WorldID)
+	// String: ScenarioID
+	writeString(buf, p.ScenarioID)
+	// VarInt: Tier
+	writeVarInt(buf, int64(p.Tier))
+	
+	return buf.Bytes(), nil
 }
 
-// WritePacketID はストリームにパケット ID を書き込みます
-func WritePacketID(w io.Writer, id uint8) error {
-return binary.Write(w, binary.LittleEndian, id)
+func (p *StartGamePacket) Unmarshal(data []byte) error {
+	buf := bytes.NewReader(data)
+	
+	var err error
+	p.EntityID, err = readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.RuntimeEntityID, err = readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	gamemode, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.PlayerGamemode = int32(gamemode)
+	
+	p.PlayerPosition[0], err = readFloat32(buf)
+	if err != nil {
+		return err
+	}
+	p.PlayerPosition[1], err = readFloat32(buf)
+	if err != nil {
+		return err
+	}
+	p.PlayerPosition[2], err = readFloat32(buf)
+	if err != nil {
+		return err
+	}
+	
+	p.Pitch, err = readFloat32(buf)
+	if err != nil {
+		return err
+	}
+	p.Yaw, err = readFloat32(buf)
+	if err != nil {
+		return err
+	}
+	
+	seed, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.Seed = seed
+	
+	dim, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.Dimension = int16(dim)
+	
+	genType, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.GeneratorType = int32(genType)
+	
+	mode, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.GameMode = int32(mode)
+	
+	p.Hardcore, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.Cheats, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.RequiresPack, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	
+	ruleCount, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.GameRules = make([]GameRule, ruleCount)
+	for i := int64(0); i < ruleCount; i++ {
+		p.GameRules[i].Name, err = readString(buf)
+		if err != nil {
+			return err
+		}
+		p.GameRules[i].Type, err = readVarInt(buf)
+		if err != nil {
+			return err
+		}
+		switch p.GameRules[i].Type {
+		case 1:
+			p.GameRules[i].Value, err = readBool(buf)
+		case 2:
+			v, err := readVarInt(buf)
+			if err != nil {
+				return err
+			}
+			p.GameRules[i].Value = int32(v)
+		case 3:
+			p.GameRules[i].Value, err = readFloat32(buf)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	
+	p.LevelName, err = readString(buf)
+	if err != nil {
+		return err
+	}
+	templateContent, err := readString(buf)
+	if err != nil {
+		return err
+	}
+	p.TemplateContent = []byte(templateContent)
+	
+	p.HasAchievements, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	timeVal, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.Time = int32(timeVal)
+	
+	p.EducationEdition, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.EduFeatures, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.RainLevel, err = readFloat32(buf)
+	if err != nil {
+		return err
+	}
+	p.LightningLevel, err = readFloat32(buf)
+	if err != nil {
+		return err
+	}
+	
+	hasPlatform, err := readBool(buf)
+	if err != nil {
+		return err
+	}
+	if hasPlatform {
+		p.Platform, err = readString(buf)
+		if err != nil {
+			return err
+		}
+	}
+	
+	p.Multiplayer, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.LANBroadcast, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	xblBroadcast, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.XBLBroadcast = int32(xblBroadcast)
+	
+	platformBroadcast, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.PlatformBroadcast = int32(platformBroadcast)
+	
+	p.InboxNotificationsEnabled, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.CommandBlockEnabled, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.RequiresResourcePack, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.ExperimentalGameplay, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.BonusChestEnabled, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.StartWithMapEnabled, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	
+	permissions, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.Permissions = int32(permissions)
+	
+	chunkRange, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.ServerChunkTickRange = int32(chunkRange)
+	
+	p.BehaviorPackLocked, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.ResourcePackLocked, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.FromLockedWorldTemplate, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.UseMSAGamerTagsOnly, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.FromWorldTemplate, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.WorldTemplateOptionLocked, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.OnlySpawnV1Villagers, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.PersonaDisabled, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.CustomSkinsDisabled, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.EmoteChatMuted, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	
+	defaultPerm, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.DefaultPlayerPermission = int32(defaultPerm)
+	
+	serverAuthInv, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.ServerAuthoritativeInventory = int32(serverAuthInv)
+	
+	p.ExperimentalGameplayOverride, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	p.ClientSideGeneration, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	
+	worldVer, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.WorldVersion = int32(worldVer)
+	
+	limitedWidth, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.LimitedWorldWidth = int32(limitedWidth)
+	
+	limitedDepth, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.LimitedWorldDepth = int32(limitedDepth)
+	
+	p.NewNether, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	
+	p.EduSharedURI, err = readString(buf)
+	if err != nil {
+		return err
+	}
+	
+	p.EduSharedResourcePatch, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	
+	p.ForceExperimentalGameplay, err = readBool(buf)
+	if err != nil {
+		return err
+	}
+	
+	p.ServerID, err = readString(buf)
+	if err != nil {
+		return err
+	}
+	
+	p.WorldID, err = readString(buf)
+	if err != nil {
+		return err
+	}
+	
+	p.ScenarioID, err = readString(buf)
+	if err != nil {
+		return err
+	}
+	
+	tier, err := readVarInt(buf)
+	if err != nil {
+		return err
+	}
+	p.Tier = int32(tier)
+	
+	return nil
 }
 
-// DecodeVarInt は可変長整数をデコードします
-func DecodeVarInt(r io.Reader) (int64, error) {
-var result int64
-var shift uint
-for {
-b, err := r.ReadByte()
-if err != nil {
-return 0, err
-}
-result |= int64(b&0x7F) << shift
-if b&0x80 == 0 {
-break
-}
-shift += 7
-if shift >= 64 {
-return 0, errors.New("varint too long")
-}
-}
-return result, nil
-}
-
-// EncodeVarInt は可変長整数をエンコードします
-func EncodeVarInt(w io.Writer, value int64) error {
-for value >= 0x80 || value < 0 {
-if err := w.WriteByte(byte(value&0x7F | 0x80)); err != nil {
-return err
-}
-value >>= 7
-}
-return w.WriteByte(byte(value))
-}
-
-// DecodeString は UTF-8 文字列をデコードします（LE 接頭辞付き）
-func DecodeString(r io.Reader) (string, error) {
-length, err := DecodeVarInt(r)
-if err != nil {
-return "", err
-}
-if length < 0 || length > 1000000 {
-return "", errors.New("invalid string length")
-}
-buf := make([]byte, length)
-if _, err := io.ReadFull(r, buf); err != nil {
-return "", err
-}
-return string(buf), nil
-}
-
-// EncodeString は UTF-8 文字列をエンコードします（LE 接頭辞付き）
-func EncodeString(w io.Writer, s string) error {
-if err := EncodeVarInt(w, int64(len(s))); err != nil {
-return err
-}
-_, err := w.Write([]byte(s))
-return err
-}
-
-// ParseStartGamePacket は StartGame パケットを解析します
-func ParseStartGamePacket(data []byte) (*StartGamePacket, error) {
-r := bytes.NewReader(data)
-
-// パケット ID をスキップ
-if _, err := r.ReadByte(); err != nil {
-return nil, err
-}
-
-pkt := &StartGamePacket{}
-var err error
-
-// EntityID
-if pkt.EntityID, err = DecodeVarInt(r); err != nil {
-return nil, err
-}
-// RuntimeEntityID
-if pkt.RuntimeEntityID, err = DecodeVarInt(r); err != nil {
-return nil, err
-}
-// PlayerGamemode
-if err := binary.Read(r, binary.LittleEndian, &pkt.PlayerGamemode); err != nil {
-return nil, err
-}
-// Position
-for i := range pkt.PlayerPosition {
-if err := binary.Read(r, binary.LittleEndian, &pkt.PlayerPosition[i]); err != nil {
-return nil, err
-}
-}
-// Pitch/Yaw
-if err := binary.Read(r, binary.LittleEndian, &pkt.Pitch); err != nil {
-return nil, err
-}
-if err := binary.Read(r, binary.LittleEndian, &pkt.Yaw); err != nil {
-return nil, err
-}
-// Seed
-if err := binary.Read(r, binary.LittleEndian, &pkt.Seed); err != nil {
-return nil, err
-}
-// Dimension
-if err := binary.Read(r, binary.LittleEndian, &pkt.Dimension); err != nil {
-return nil, err
-}
-// GeneratorType
-if err := binary.Read(r, binary.LittleEndian, &pkt.GeneratorType); err != nil {
-return nil, err
-}
-// GamemodeForAll
-if err := binary.Read(r, binary.LittleEndian, &pkt.GamemodeForAll); err != nil {
-return nil, err
-}
-// Hardcore
-if err := binary.Read(r, binary.LittleEndian, &pkt.Hardcore); err != nil {
-return nil, err
-}
-// Cheats
-if err := binary.Read(r, binary.LittleEndian, &pkt.Cheats); err != nil {
-return nil, err
-}
-// CommandsEnabled
-if err := binary.Read(r, binary.LittleEndian, &pkt.CommandsEnabled); err != nil {
-return nil, err
-}
-// NoMobs
-if err := binary.Read(r, binary.LittleEndian, &pkt.NoMobs); err != nil {
-return nil, err
-}
-
-// GameRules
-numRules, err := DecodeVarInt(r)
-if err != nil {
-return nil, err
-}
-pkt.GameRules = make([]GameRule, numRules)
-for i := int64(0); i < numRules; i++ {
-rule := &pkt.GameRules[i]
-if rule.Name, err = DecodeString(r); err != nil {
-return nil, err
-}
-if err := binary.Read(r, binary.LittleEndian, &rule.Type); err != nil {
-return nil, err
-}
-switch rule.Type {
-case 1: // bool
-var v bool
-if err := binary.Read(r, binary.LittleEndian, &v); err != nil {
-return nil, err
-}
-rule.Value = v
-case 2: // int
-var v int32
-if err := binary.Read(r, binary.LittleEndian, &v); err != nil {
-return nil, err
-}
-rule.Value = v
-case 3: // float
-var v float32
-if err := binary.Read(r, binary.LittleEndian, &v); err != nil {
-return nil, err
-}
-rule.Value = v
-default:
-return nil, errors.New("unknown game rule type")
-}
-}
-
-// Experiments
-numExp, err := DecodeVarInt(r)
-if err != nil {
-return nil, err
-}
-pkt.Experiments = make([]Experiment, numExp)
-for i := int64(0); i < numExp; i++ {
-exp := &pkt.Experiments[i]
-if exp.Name, err = DecodeString(r); err != nil {
-return nil, err
-}
-if err := binary.Read(r, binary.LittleEndian, &exp.Enabled); err != nil {
-return nil, err
-}
-}
-
-// BonusChest
-if err := binary.Read(r, binary.LittleEndian, &pkt.BonusChest); err != nil {
-return nil, err
-}
-// StartWithMap
-if err := binary.Read(r, binary.LittleEndian, &pkt.StartWithMap); err != nil {
-return nil, err
-}
-// ServerVersion
-if pkt.ServerVersion, err = DecodeString(r); err != nil {
-return nil, err
-}
-// EduFeatures
-if err := binary.Read(r, binary.LittleEndian, &pkt.EduFeatures); err != nil {
-return nil, err
-}
-// EduProductUUID
-if pkt.EduProductUUID, err = DecodeString(r); err != nil {
-return nil, err
-}
-// RainLevel
-if err := binary.Read(r, binary.LittleEndian, &pkt.RainLevel); err != nil {
-return nil, err
-}
-// LightningLevel
-if err := binary.Read(r, binary.LittleEndian, &pkt.LightningLevel); err != nil {
-return nil, err
-}
-// ConfirmedPlatform
-if err := binary.Read(r, binary.LittleEndian, &pkt.ConfirmedPlatform); err != nil {
-return nil, err
-}
-// PlatformBroadcast
-if pkt.PlatformBroadcast, err = DecodeString(r); err != nil {
-return nil, err
-}
-// XBLBroadcast
-if pkt.XBLBroadcast, err = DecodeString(r); err != nil {
-return nil, err
-}
-// DSLBroadcast
-if pkt.DSLBroadcast, err = DecodeString(r); err != nil {
-return nil, err
-}
-// WorldName
-if pkt.WorldName, err = DecodeString(r); err != nil {
-return nil, err
-}
-// TemplateContentKey
-if pkt.TemplateContentKey, err = DecodeString(r); err != nil {
-return nil, err
-}
-// IsFromTemplate
-if err := binary.Read(r, binary.LittleEndian, &pkt.IsFromTemplate); err != nil {
-return nil, err
-}
-// IsTrial
-if err := binary.Read(r, binary.LittleEndian, &pkt.IsTrial); err != nil {
-return nil, err
-}
-// MovementType
-if err := binary.Read(r, binary.LittleEndian, &pkt.MovementType); err != nil {
-return nil, err
-}
-// ServerAuthoritativeInventory
-if err := binary.Read(r, binary.LittleEndian, &pkt.ServerAuthoritativeInventory); err != nil {
-return nil, err
-}
-// EngineVersion
-if pkt.EngineVersion, err = DecodeString(r); err != nil {
-return nil, err
-}
-// ServerEngineVersion
-if pkt.ServerEngineVersion, err = DecodeString(r); err != nil {
-return nil, err
-}
-
-return pkt, nil
-}
-
-// CodeBuilderPacket は Code Builder パケットを表します
+// CodeBuilderPacket は Code Builder パケットです
 type CodeBuilderPacket struct {
-URL         string
-CodeStatus  uint8 // 0=none, 1=request, 2=response
-ShouldOpen  bool
-Code        string
+	URL string
+	Code string
 }
 
-// ParseCodeBuilderPacket は Code Builder パケットを解析します
-func ParseCodeBuilderPacket(data []byte) (*CodeBuilderPacket, error) {
-r := bytes.NewReader(data)
-
-// パケット ID をスキップ
-if _, err := r.ReadByte(); err != nil {
-return nil, err
+func (p *CodeBuilderPacket) ID() PacketID {
+	return PacketIDCodeBuilderPacket
 }
 
-pkt := &CodeBuilderPacket{}
-var err error
-
-// URL
-if pkt.URL, err = DecodeString(r); err != nil {
-return nil, err
-}
-// CodeStatus
-if err := binary.Read(r, binary.LittleEndian, &pkt.CodeStatus); err != nil {
-return nil, err
-}
-// ShouldOpen
-if err := binary.Read(r, binary.LittleEndian, &pkt.ShouldOpen); err != nil {
-return nil, err
-}
-// Code (optional)
-if pkt.CodeStatus == 2 { // response
-if pkt.Code, err = DecodeString(r); err != nil {
-return nil, err
-}
+func (p *CodeBuilderPacket) Marshal() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	writeString(buf, p.URL)
+	writeString(buf, p.Code)
+	return buf.Bytes(), nil
 }
 
-return pkt, nil
+func (p *CodeBuilderPacket) Unmarshal(data []byte) error {
+	buf := bytes.NewReader(data)
+	var err error
+	p.URL, err = readString(buf)
+	if err != nil {
+		return err
+	}
+	p.Code, err = readString(buf)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
-// EncodeCodeBuilderPacket は Code Builder パケットをエンコードします
-func EncodeCodeBuilderPacket(pkt *CodeBuilderPacket) ([]byte, error) {
-var buf bytes.Buffer
-
-// PacketID
-if err := buf.WriteByte(PacketIDCodeBuilder); err != nil {
-return nil, err
-}
-// URL
-if err := EncodeString(&buf, pkt.URL); err != nil {
-return nil, err
-}
-// CodeStatus
-if err := binary.Write(&buf, binary.LittleEndian, pkt.CodeStatus); err != nil {
-return nil, err
-}
-// ShouldOpen
-if err := binary.Write(&buf, binary.LittleEndian, pkt.ShouldOpen); err != nil {
-return nil, err
-}
-// Code (if response)
-if pkt.CodeStatus == 2 && pkt.Code != "" {
-if err := EncodeString(&buf, pkt.Code); err != nil {
-return nil, err
-}
+// Helper functions
+func writeVarInt(buf *bytes.Buffer, val int64) {
+	for val >= 0x80 || val < -0x80 {
+		buf.WriteByte(byte(val&0x7f) | 0x80)
+		val >>= 7
+	}
+	buf.WriteByte(byte(val))
 }
 
-return buf.Bytes(), nil
+func readVarInt(r io.Reader) (int64, error) {
+	var result int64
+	var shift uint
+	for {
+		b, err := readByte(r)
+		if err != nil {
+			return 0, err
+		}
+		result |= int64(b&0x7f) << shift
+		if b&0x80 == 0 {
+			break
+		}
+		shift += 7
+		if shift >= 64 {
+			return 0, errors.New("varint too long")
+		}
+	}
+	return result, nil
+}
+
+func writeFloat32(buf *bytes.Buffer, val float32) {
+	binary.Write(buf, binary.LittleEndian, val)
+}
+
+func readFloat32(r io.Reader) (float32, error) {
+	var val float32
+	err := binary.Read(r, binary.LittleEndian, &val)
+	return val, err
+}
+
+func writeBool(buf *bytes.Buffer, val bool) {
+	if val {
+		buf.WriteByte(1)
+	} else {
+		buf.WriteByte(0)
+	}
+}
+
+func readBool(r io.Reader) (bool, error) {
+	b, err := readByte(r)
+	if err != nil {
+		return false, err
+	}
+	return b != 0, nil
+}
+
+func writeString(buf *bytes.Buffer, val string) {
+	writeVarInt(buf, int64(len(val)))
+	buf.WriteString(val)
+}
+
+func readString(r io.Reader) (string, error) {
+	length, err := readVarInt(r)
+	if err != nil {
+		return "", err
+	}
+	if length < 0 {
+		return "", errors.New("invalid string length")
+	}
+	buf := make([]byte, length)
+	_, err = io.ReadFull(r, buf)
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
+}
+
+func readByte(r io.Reader) (byte, error) {
+	if br, ok := r.(*bytes.Reader); ok {
+		b, err := br.ReadByte()
+		return b, err
+	}
+	buf := make([]byte, 1)
+	_, err := io.ReadFull(r, buf)
+	return buf[0], err
+}
+
+// ParsePacket はパケット ID からパケットをパースします
+func ParsePacket(packetID PacketID, data []byte) (Packet, error) {
+	var pkt Packet
+	switch packetID {
+	case PacketIDStartGame:
+		pkt = &StartGamePacket{}
+	case PacketIDCodeBuilderPacket:
+		pkt = &CodeBuilderPacket{}
+	default:
+		return nil, fmt.Errorf("unknown packet ID: %d", packetID)
+	}
+	if err := pkt.Unmarshal(data); err != nil {
+		return nil, err
+	}
+	return pkt, nil
 }
