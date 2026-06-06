@@ -119,7 +119,16 @@ type tokenResponse struct {
 
 func (a *Authenticator) pollForToken(ctx context.Context, deviceCode *deviceCodeResponse) (*Account, error) {
 	interval := time.Duration(deviceCode.Interval) * time.Second
+	if interval < 1*time.Second {
+		interval = 5 * time.Second // デフォルト間隔を確保
+	}
 	timeout := time.Duration(deviceCode.ExpiresIn) * time.Second
+	if timeout < 1*time.Minute {
+		timeout = 15 * time.Minute // デフォルトタイムアウトを確保
+	}
+	
+	fmt.Printf("🔄 認証待機中... (間隔: %v, タイムアウト: %v)\n", interval, timeout)
+	
 	timer := time.NewTimer(timeout)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -131,18 +140,26 @@ func (a *Authenticator) pollForToken(ctx context.Context, deviceCode *deviceCode
 	data.Set("device_code", deviceCode.DeviceCode)
 	data.Set("scope", "service::user.auth.xboxlive.com::MBI_SSL")
 
+	attempt := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-timer.C:
-			return nil, fmt.Errorf("認証タイムアウト")
+			return nil, fmt.Errorf("認証タイムアウト (%v)", timeout)
 		case <-ticker.C:
+			attempt++
+			if attempt%10 == 0 {
+				fmt.Printf("⏳ 待機中... (%d/%d 分)\n", attempt/12, int(timeout.Minutes()))
+			}
 			account, err := a.tryGetToken(ctx, data)
 			if err == nil {
 				return account, nil
 			}
-			// エラーは無視（まだ認証されていない）
+			// デバッグ用に最初の数回と最後のエラーを出力
+			if attempt <= 3 || attempt%30 == 0 {
+				fmt.Printf("📡 認証確認中... (試行: %d) エラー: %v\n", attempt, err)
+			}
 		}
 	}
 }
