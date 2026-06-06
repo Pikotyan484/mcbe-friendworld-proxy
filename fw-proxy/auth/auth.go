@@ -74,6 +74,7 @@ func (a *Authenticator) getDeviceCode(ctx context.Context) (*deviceCodeResponse,
 	data := url.Values{}
 	data.Set("client_id", "000000004c12ae6f") // Minecraft のクライアント ID
 	data.Set("scope", "service::user.auth.xboxlive.com::MBI_SSL")
+	data.Set("response_type", "device_code")
 
 	req, err := http.NewRequestWithContext(ctx, "POST", 
 		"https://login.live.com/oauth20_connect.srf", 
