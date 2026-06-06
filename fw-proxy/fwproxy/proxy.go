@@ -57,7 +57,7 @@ func NewProxy(cfg ProxyConfig) (*Proxy, error) {
 
 // Start はプロキシを開始します
 func (p *Proxy) Start(ctx context.Context) error {
-	p.logger.Printf("🚀 プロキシ開始: %s", p.listener.Addr())
+	p.logger.Printf("🚀 プロキシ開始: %s", p.listener.LocalAddr())
 	p.logger.Printf("   Gamertag: %s (XUID: %s)", p.account.Gamertag, p.account.XUID)
 	if p.session != nil {
 		p.logger.Printf("   Session: %s", p.session.SessionID)
