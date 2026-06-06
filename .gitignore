@@ -35,35 +35,7 @@ htmlcov/
 .coverage
 
 # Build directories
-target/
 build/
 dist/
-
-# Python specific
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-*.egg-info/
-.eggs/
-.coverage
-htmlcov/
-.tox/
-.nox/
-.cover/
-.mypy_cache/
-.pytest_cache/
-.hypothesis/
-
-# Go specific
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-*.prof
-.DS_Store
+target/
 ```
